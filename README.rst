@@ -1,4 +1,4 @@
-We have updated PyDistMesh to run faster and operate over larger mesh sizes. To do so, we make use of functionality from the SeismicMesh (https://github.com/krober10nd/SeismicMesh) and CGAL (https://github.com/cgal) libraries. As such, SeismicMesh and "libgcal-dev" are required dependencies of this software. Otherwise, this version of PyDistMesh can be run just like previous versions.
+We have updated PyDistMesh to run faster and operate over larger mesh sizes in 2 dimensions. To do so, we make use of functionality from the SeismicMesh (https://github.com/krober10nd/SeismicMesh) and CGAL (https://github.com/cgal) libraries. As such, SeismicMesh, its required dependencies, and "libgcal-dev" are required dependencies of this software. Otherwise, this version of PyDistMesh can be run just like previous versions. Use the "distmesh2d_modded" function instead of the "distmesh2d" function for faster meshing.
 
 Original ReadMe:
 
