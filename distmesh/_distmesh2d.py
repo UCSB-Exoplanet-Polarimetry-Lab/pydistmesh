@@ -18,16 +18,148 @@ from __future__ import division
 
 import numpy as np
 import scipy.spatial as spspatial
+from scipy.interpolate import interp1d
+from scipy.interpolate import RegularGridInterpolator
+
+import pickle
+from matplotlib import pyplot as plt
+from IPython import get_ipython
+
+import time
+import copy
+import pandas as pd
 
 # Local imports
 import distmesh.mlcompat as ml
 import distmesh.utils as dmutils
+import distmesh as dm
+from distmesh_modded_utils import *
+
+from __future__ import division
+
+from scipy.spatial import Delaunay
+
+from mpi4py import MPI
+from _delaunay_class import DelaunayTriangulation as DT2
+from SeismicMesh import geometry
+from SeismicMesh.generation import utils as mutils
 
 __all__ = ['distmesh2d']
 
 #-----------------------------------------------------------------------------
 # Functions
 #-----------------------------------------------------------------------------
+
+
+
+def distmesh2d_modded(fd, fh, h0, bbox, pfix=None, dpt=0.01):
+    """
+    distmesh2d: 2-D Mesh Generator using Distance Functions.
+
+    Usage
+    -----
+    >>> p, t = distmesh2d(fd, fh, h0, bbox, pfix, dpt)
+
+    Parameters
+    ----------
+    fd:        Distance function d(x,y)
+    fh:        Scaled edge length function h(x,y)
+    h0:        Initial edge length
+    bbox:      Bounding box, (xmin, ymin, xmax, ymax)
+    pfix:      Fixed node positions, shape (nfix, 2)
+    dpt:       Termination criterion
+
+    Returns
+    -------
+    p:         Node positions (Nx2)
+    t:         Triangle indices (NTx3)
+
+    """
+    ttol=.1; Fscale=1.2; deltat=.2; geps=.001*h0;
+    deps=np.sqrt(np.finfo(np.double).eps)*h0;
+    densityctrlfreq=30;
+
+    # Extract bounding box
+    xmin, ymin, xmax, ymax = bbox
+    if pfix is not None:
+        pfix = np.array(pfix, dtype='d')
+
+    # Create initial distribution in bounding box (equilateral triangles)
+    x, y = np.mgrid[xmin:(xmax+h0):h0,
+                    ymin:(ymax+h0*np.sqrt(3)/2):h0*np.sqrt(3)/2]
+    x[:, 1::2] += h0/2                               # Shift even rows
+    p = np.vstack((x.flat, y.flat)).T                # List of node coordinates
+    del(x)
+    del(y)
+    # Remove points outside the region, apply the rejection method
+    p = p[fd(p)<geps]                                # Keep only d<0 points
+    r0 = 1/fh(p)**2                                  # Probability to keep point
+    p = p[np.random.random(p.shape[0])<r0/r0.max()]  # Rejection method
+    if pfix is not None:
+        p = ml.setdiff_rows(p, pfix)                 # Remove duplicated nodes
+        pfix = ml.unique_rows(pfix); nfix = pfix.shape[0]
+        p = np.vstack((pfix, p))                     # Prepend fix points
+    else:
+        nfix = 0
+    N = p.shape[0]                                   # Number of points N
+    del(r0)
+    count = 0
+    pold = np.array([(float('inf'),float('inf'))])           # For first iteration
+
+    print('Beginning main meshing loop')
+    while True:
+        count += 1
+
+        # Retriangulation by the Delaunay algorithm
+        dist = lambda p1, p2: np.sqrt(((p1-p2)**2).sum(1))
+        if (dist(p, pold[:len(p)])/h0).max() > ttol:          # Any large movement?
+            pold = p.copy()                          # Save current positions
+
+            dt = DT2()
+            dt.insert(p.ravel().tolist())
+            p, t = _get_topology(dt)
+            del(dt)
+
+            pmid = np.sum(p[t],axis=1)/3                     # Compute centroids
+            t = t[fd(pmid) < -geps]                  # Keep interior triangles
+            del(pmid)
+
+        # Move mesh points based on bar lengths L and forces F
+        Ftot = _compute_forces(p, t, fh, h0)#, L0mult)
+        Ftot[:nfix] = 0                              # Force = 0 at fixed points
+        p += deltat*Ftot                             # Update node positions
+        
+        ############################################################
+        # Bring outside points back to the boundary
+    
+        d = fd(p); ix = d>0                          # Find points outside (d>0)
+        if ix.any():
+            dgradx = (fd(p[ix]+[deps,0])-d[ix])/deps # Numerical
+            dgrady = (fd(p[ix]+[0,deps])-d[ix])/deps # gradient
+            dgrad2 = dgradx**2 + dgrady**2
+            p[ix] -= (d[ix]*np.vstack((dgradx, dgrady))/dgrad2).T # Project
+            del(dgradx)
+            del(dgrady)
+            del(dgrad2)
+            
+        # 8. Termination criterion: All interior nodes move less than dptol (scaled)
+        
+        dptol= dpt
+        crit = (np.sqrt((deltat*Ftot[d<-geps]**2).sum(1))/h0).max()
+        del(Ftot)
+        del(d)
+        print (crit, end="\r")
+#         convtest.append(crit)
+        if  crit < dptol:# or count:
+            break
+
+    # Clean up and plot final mesh
+    p, t = dmutils.fixmesh(p, t)
+
+    return p, t
+
+
+#  OLD distmesh func:
 
 def distmesh2d(fd, fh, h0, bbox, pfix=None, fig='gcf', dptol=.001, ttol=.1,
                Fscale=1.2, deltat=.2, geps_multiplier=.001, densityctrlfreq=30):
